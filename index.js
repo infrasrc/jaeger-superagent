@@ -102,9 +102,9 @@ class SuperAgentJaeger {
         this._endAt = process.hrtime();
 
         if (error) {
-            this.logError(error, error.message, error.tack)
+            this.logError(error, error.message, error.stack)
         } else {
-            this.logEvent('response', this.body);
+            this.logEvent('response.body', this.body);
         }
         this.logEvent('eventTimes', this.eventTimes);
         this.span.finish();
@@ -150,13 +150,16 @@ class SuperAgentJaeger {
         this.response.on('end', this.endTrace.bind(this));
     }
 
-    onRequest({ req }) {
-        this.request = req;
+    onRequest(request) {
+        this.request = request;
+        if(!_.isEmpty(this.request._data))
+            this.logEvent("request.body", this.request._data);
+        if(!_.isEmpty(this.request._formData))
+            this.logEvent("request.formData", this.request._formData);
         this._startAt = process.hrtime()
-        this.request.on('socket', this.onSocket.bind(this));
-        this.request.on('response', this.onResponse.bind(this));
+        this.request.req.on('socket', this.onSocket.bind(this));
+        this.request.req.on('response', this.onResponse.bind(this));
     }
-
 }
 
 module.exports = {
