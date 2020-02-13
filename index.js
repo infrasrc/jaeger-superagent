@@ -21,7 +21,7 @@ class SuperAgentJaeger {
         this._firstByteAt = null;
         this._endAt = null;
         this._query = Request.prototype.query;
-        this.query.bind(this);
+        this.query = this.query.bind(this);
         Request.prototype.query = this.query;
     }
 
