@@ -3,15 +3,15 @@ const { Tags, FORMAT_HTTP_HEADERS, globalTracer } = Tracer.opentracing;
 const tracer = globalTracer();
 const NS_PER_SEC = 1e9;
 const MS_PER_NS = 1e6;
-const { get, post, Request } = require('superagent');
+const { get, post } = require('superagent');
 const _ = require('lodash');
 const URL = require('url');
 
 class SuperAgentJaeger {
 
-    constructor(parent) {
+    constructor(request, parentSpan) {
         this.name = 'superagent.request';
-        this.span = tracer.startSpan(this.name, { childOf: parent });
+        this.span = tracer.startSpan(this.name, { childOf: parentSpan });
         this.body = "";
         this._startAt = null;
         this._socketAssigned = null;
@@ -20,14 +20,16 @@ class SuperAgentJaeger {
         this._tlsHandshakeAt = null;
         this._firstByteAt = null;
         this._endAt = null;
-        this._query = Request.prototype.query;
+        this._query = request.query.bind(request);
         this.query = this.query.bind(this);
-        Request.prototype.query = this.query;
+        request.query = this.query;
     }
 
     query(val) {
+        if (_.isEmpty(val)) return;
         this.queryParams = val;
-        this._query(val);
+        this.logEvent('query.params', val);
+        return this._query(val);
     }
 
     getHrTimeDurationInMs(startTime, endTime) {
@@ -89,7 +91,6 @@ class SuperAgentJaeger {
         this.span.setTag("http.hostname", this.uri.hostname);
         this.span.setTag(Tags.HTTP_METHOD, agent.method);
         this.span.setTag(Tags.SPAN_KIND, Tags.SPAN_KIND_RPC_CLIENT);
-        this.span.setTag("query.params", this.queryParams);    
         tracer.inject(this.span, FORMAT_HTTP_HEADERS, this.headers);
         this.agent.set(this.headers);
         this.agent.on('request', this.onRequest.bind(this));
@@ -161,29 +162,29 @@ class SuperAgentJaeger {
 
     onRequest(request) {
         this.request = request;
-        if(!_.isEmpty(this.request._data))
+        if (!_.isEmpty(this.request._data))
             this.logEvent("request.body", this.request._data);
-        if(!_.isEmpty(this.request._formData))
+        if (!_.isEmpty(this.request._formData))
             this.logEvent("request.formData", this.request._formData);
         this._startAt = process.hrtime()
         this.request.req.on('socket', this.onSocket.bind(this));
         this.request.req.on('response', this.onResponse.bind(this));
-    
     }
 }
 
 module.exports = {
     get: (...args) => {
-       
         const parentSpan = _.find(args, (a) => a.constructor.name === 'Span');
-        const superAgentTracer = new SuperAgentJaeger(parentSpan);
         args = _.pull(args, parentSpan);
-        return get(...args).use(superAgentTracer.startTrace.bind(superAgentTracer))
+        const request = get(...args);
+        const superAgentTracer = new SuperAgentJaeger(request, parentSpan);
+        return request.use(superAgentTracer.startTrace.bind(superAgentTracer))
     },
     post: (...args) => {
         const parentSpan = _.find(args, (a) => a.constructor.name === 'Span');
-        const superAgentTracer = new SuperAgentJaeger(parentSpan);
         args = _.pull(args, parentSpan);
-        return post(...args).use(superAgentTracer.startTrace.bind(superAgentTracer))
+        const request = post(...args);
+        const superAgentTracer = new SuperAgentJaeger(request, parentSpan);
+        return request.use(superAgentTracer.startTrace.bind(superAgentTracer))
     }
 };
