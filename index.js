@@ -3,7 +3,7 @@ const { Tags, FORMAT_HTTP_HEADERS, globalTracer } = Tracer.opentracing;
 const tracer = globalTracer();
 const NS_PER_SEC = 1e9;
 const MS_PER_NS = 1e6;
-const { get, post } = require('superagent');
+const { get, post, Request } = require('superagent');
 const _ = require('lodash');
 const URL = require('url');
 
@@ -20,6 +20,14 @@ class SuperAgentJaeger {
         this._tlsHandshakeAt = null;
         this._firstByteAt = null;
         this._endAt = null;
+        this._query = Request.prototype.query;
+        this.query.bind(this);
+        Request.prototype.query = this.query;
+    }
+
+    query(val) {
+        this.queryParams = val;
+        this._query(val);
     }
 
     getHrTimeDurationInMs(startTime, endTime) {
@@ -81,6 +89,7 @@ class SuperAgentJaeger {
         this.span.setTag("http.hostname", this.uri.hostname);
         this.span.setTag(Tags.HTTP_METHOD, agent.method);
         this.span.setTag(Tags.SPAN_KIND, Tags.SPAN_KIND_RPC_CLIENT);
+        this.span.setTag("query.params", this.queryParams);    
         tracer.inject(this.span, FORMAT_HTTP_HEADERS, this.headers);
         this.agent.set(this.headers);
         this.agent.on('request', this.onRequest.bind(this));
@@ -159,11 +168,13 @@ class SuperAgentJaeger {
         this._startAt = process.hrtime()
         this.request.req.on('socket', this.onSocket.bind(this));
         this.request.req.on('response', this.onResponse.bind(this));
+    
     }
 }
 
 module.exports = {
     get: (...args) => {
+       
         const parentSpan = _.find(args, (a) => a.constructor.name === 'Span');
         const superAgentTracer = new SuperAgentJaeger(parentSpan);
         args = _.pull(args, parentSpan);
