@@ -3,9 +3,24 @@ const { Tags, FORMAT_HTTP_HEADERS, globalTracer } = Tracer.opentracing;
 const tracer = globalTracer();
 const NS_PER_SEC = 1e9;
 const MS_PER_NS = 1e6;
-const { get, post } = require('superagent');
+const request = require('superagent');
 const _ = require('lodash');
 const URL = require('url');
+const methods = require('methods');
+const ref = {};
+
+methods.forEach(method => {
+    const name = method;
+    method = (method === 'del') ? 'Delete' : method.toUpperCase();
+    ref[name] = request[name];
+    request[name] = (...args) => {
+      const parentSpan = _.find(args, (a) => a.constructor.name === 'Span');
+      args = _.pull(args, parentSpan);
+      const request = ref[name](...args);
+      const superAgentTracer = new SuperAgentJaeger(request, parentSpan);
+      return request.use(superAgentTracer.startTrace.bind(superAgentTracer));
+    };
+});
 
 class SuperAgentJaeger {
 
@@ -169,22 +184,8 @@ class SuperAgentJaeger {
         this._startAt = process.hrtime()
         this.request.req.on('socket', this.onSocket.bind(this));
         this.request.req.on('response', this.onResponse.bind(this));
+
     }
 }
 
-module.exports = {
-    get: (...args) => {
-        const parentSpan = _.find(args, (a) => a.constructor.name === 'Span');
-        args = _.pull(args, parentSpan);
-        const request = get(...args);
-        const superAgentTracer = new SuperAgentJaeger(request, parentSpan);
-        return request.use(superAgentTracer.startTrace.bind(superAgentTracer))
-    },
-    post: (...args) => {
-        const parentSpan = _.find(args, (a) => a.constructor.name === 'Span');
-        args = _.pull(args, parentSpan);
-        const request = post(...args);
-        const superAgentTracer = new SuperAgentJaeger(request, parentSpan);
-        return request.use(superAgentTracer.startTrace.bind(superAgentTracer))
-    }
-};
+module.exports = request;

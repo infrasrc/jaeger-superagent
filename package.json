@@ -19,6 +19,7 @@
   "dependencies": {
     "jaeger-tracer": "git+https://github.com/infrasrc/jaeger-tracer.git",
     "lodash": "^4.17.15",
+    "methods": "^1.1.2",
     "superagent": "^5.2.1",
     "url": "^0.11.0"
   }
