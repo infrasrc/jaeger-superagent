@@ -14,13 +14,31 @@ methods.forEach(method => {
     method = (method === 'del') ? 'Delete' : method.toUpperCase();
     ref[name] = request[name];
     request[name] = (...args) => {
-      const parentSpan = _.find(args, (a) => 'Span' === _.get(a, 'constructor.name')) || null;
-      args = _.pull(args, parentSpan);
-      const request = ref[name](...args);
-      const superAgentTracer = new SuperAgentJaeger(request, parentSpan);
-      return request.use(superAgentTracer.startTrace.bind(superAgentTracer));
+        const parentSpan = _.find(args, (a) => 'Span' === _.get(a, 'constructor.name')) || null;
+        args = _.pull(args, parentSpan);
+        const request = ref[name](...args);
+        const superAgentTracer = new SuperAgentJaeger(request, parentSpan);
+        return request.use(superAgentTracer.startTrace.bind(superAgentTracer));
     };
 });
+
+const wrapAsync = (fn, result) => (new Promise((res, rej) => {
+    try {
+        fn(result);
+        res(true);
+    } catch (error) {
+        rej(error);
+    }
+}));
+
+const parseBody = (body) => {
+    let res = body;
+    try {
+        res = JSON.parse(body);
+    } catch (error) {
+    }
+    return res;
+}
 
 class SuperAgentJaeger {
 
@@ -96,6 +114,7 @@ class SuperAgentJaeger {
     }
 
     startTrace(agent) {
+        agent.span = this.span;
         this.headers = {};
         this.agent = agent;
         this.url = agent.url;
@@ -121,7 +140,7 @@ class SuperAgentJaeger {
         this.span.log({ 'event': 'error', 'error.object': errorObject, 'message': message, 'stack': stack });
     }
 
-    endTrace(error) {
+    async endTrace(error) {
         let { statusCode } = this.response || { statusCode: 500 };
         this.span.setTag(Tags.HTTP_STATUS_CODE, statusCode);
         this._endAt = process.hrtime();
@@ -129,6 +148,11 @@ class SuperAgentJaeger {
         if (error) {
             this.logError(error, error.message, error.stack)
         } else {
+            const body = parseBody(this.body);
+
+            if (typeof this.agent.onResponse === "function")
+                await wrapAsync(this.agent.onResponse, body);
+
             this.logEvent('response.body', this.body);
         }
         this.logEvent('eventTimes', this.eventTimes);
