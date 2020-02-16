@@ -14,7 +14,7 @@ methods.forEach(method => {
     method = (method === 'del') ? 'Delete' : method.toUpperCase();
     ref[name] = request[name];
     request[name] = (...args) => {
-      const parentSpan = _.find(args, (a) => a.constructor.name === 'Span');
+      const parentSpan = _.find(args, (a) => 'Span' === _.get(a, 'constructor.name')) || null;
       args = _.pull(args, parentSpan);
       const request = ref[name](...args);
       const superAgentTracer = new SuperAgentJaeger(request, parentSpan);
