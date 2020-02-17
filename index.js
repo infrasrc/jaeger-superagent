@@ -3,6 +3,7 @@ const { Tags, FORMAT_HTTP_HEADERS, globalTracer } = Tracer.opentracing;
 const tracer = globalTracer();
 const NS_PER_SEC = 1e9;
 const MS_PER_NS = 1e6;
+const TWO_HOURS_IN_MS = 2 * 60 * 60 * 1000;
 const request = require('superagent');
 const _ = require('lodash');
 const URL = require('url');
@@ -40,11 +41,13 @@ const parseBody = (body) => {
     return res;
 }
 
+
 class SuperAgentJaeger {
 
     constructor(request, parentSpan) {
         this.name = 'superagent.request';
         this.span = tracer.startSpan(this.name, { childOf: parentSpan });
+        this.setTimeout();        
         this.body = "";
         this._startAt = null;
         this._socketAssigned = null;
@@ -56,6 +59,13 @@ class SuperAgentJaeger {
         this._query = request.query.bind(request);
         this.query = this.query.bind(this);
         request.query = this.query;
+    }
+ 
+    setTimeout () {
+        this.span.timeout = setTimeout(() => {            
+            this.span.setTag("span.timeout", true);
+            this.endTrace();
+        }, TWO_HOURS_IN_MS);
     }
 
     query(val) {
@@ -141,6 +151,10 @@ class SuperAgentJaeger {
     }
 
     async endTrace(error) {
+        if (this.span.timeout) {
+            clearTimeout(span.timeout);
+            this.span.setTag("span.timeout", true);
+        }   
         let { statusCode } = this.response || { statusCode: 500 };
         this.span.setTag(Tags.HTTP_STATUS_CODE, statusCode);
         this._endAt = process.hrtime();
