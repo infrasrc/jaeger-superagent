@@ -152,7 +152,7 @@ class SuperAgentJaeger {
 
     async endTrace(error) {
         if (this.span.timeout) {
-            clearTimeout(span.timeout);
+            clearTimeout(this.span.timeout);
             this.span.setTag("span.timeout", true);
         }   
         let { statusCode } = this.response || { statusCode: 500 };
