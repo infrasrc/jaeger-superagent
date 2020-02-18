@@ -23,23 +23,6 @@ methods.forEach(method => {
     };
 });
 
-const wrapAsync = (fn, result) => (new Promise((res, rej) => {
-    try {
-        fn(result);
-        res(true);
-    } catch (error) {
-        rej(error);
-    }
-}));
-
-const parseBody = (body) => {
-    let res = body;
-    try {
-        res = JSON.parse(body);
-    } catch (error) {
-    }
-    return res;
-}
 
 
 class SuperAgentJaeger {
@@ -58,6 +41,7 @@ class SuperAgentJaeger {
         this._endAt = null;
         this._query = request.query.bind(request);
         this.query = this.query.bind(this);
+        this.queryParams = {};
         request.query = this.query;
     }
  
@@ -68,11 +52,10 @@ class SuperAgentJaeger {
         }, TWO_HOURS_IN_MS);
     }
 
-    query(val) {
-        if (_.isEmpty(val)) return;
-        this.queryParams = val;
-        this.logEvent('query.params', val);
-        return this._query(val);
+    query(param) {
+        if (_.isEmpty(param)) return;
+        this.queryParams = _.merge(this.queryParams, param);
+        return this._query(param);
     }
 
     getHrTimeDurationInMs(startTime, endTime) {
@@ -162,11 +145,6 @@ class SuperAgentJaeger {
         if (error) {
             this.logError(error, error.message, error.stack)
         } else {
-            const body = parseBody(this.body);
-
-            if (typeof this.agent.onResponse === "function")
-                await wrapAsync(this.agent.onResponse, body);
-
             this.logEvent('response.body', this.body);
         }
         this.logEvent('eventTimes', this.eventTimes);
@@ -206,19 +184,25 @@ class SuperAgentJaeger {
         this.body += data;
     }
 
-    onResponse(response) {
-        this.response = response;
+    onResponse(response) {     
+        this.response = response;        
         this.response.once('readable', this.readable.bind(this));
         this.response.on('data', this.data.bind(this));
         this.response.on('end', this.endTrace.bind(this));
     }
 
-    onRequest(request) {
+    onRequest(request) {        
         this.request = request;
+        this.request.span = this.span;
         if (!_.isEmpty(this.request._data))
             this.logEvent("request.body", this.request._data);
         if (!_.isEmpty(this.request._formData))
             this.logEvent("request.formData", this.request._formData);
+
+        _.each(this.queryParams, (queryValue, queryName) => {
+            if(queryName) this.span.setTag(`query.${queryName}`, queryValue);
+        });
+
         this._startAt = process.hrtime()
         this.request.req.on('socket', this.onSocket.bind(this));
         this.request.req.on('response', this.onResponse.bind(this));
