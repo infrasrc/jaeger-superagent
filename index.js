@@ -23,14 +23,12 @@ methods.forEach(method => {
     };
 });
 
-
-
 class SuperAgentJaeger {
 
     constructor(request, parentSpan) {
         this.name = 'superagent.request';
         this.span = tracer.startSpan(this.name, { childOf: parentSpan });
-        this.setTimeout();        
+        this.setTimeout();
         this.body = "";
         this._startAt = null;
         this._socketAssigned = null;
@@ -44,17 +42,18 @@ class SuperAgentJaeger {
         this.queryParams = {};
         request.query = this.query;
     }
- 
-    setTimeout () {
-        this.span.timeout = setTimeout(() => {            
+
+    setTimeout() {
+        this.span.timeout = setTimeout(() => {
             this.span.setTag("span.timeout", true);
             this.endTrace();
         }, TWO_HOURS_IN_MS);
     }
 
     query(param) {
-        if (_.isEmpty(param)) return;
-        this.queryParams = _.merge(this.queryParams, param);
+        if (!_.isEmpty(param)) {
+            this.queryParams = _.merge(this.queryParams, param);
+        }
         return this._query(param);
     }
 
@@ -136,8 +135,7 @@ class SuperAgentJaeger {
     async endTrace(error) {
         if (this.span.timeout) {
             clearTimeout(this.span.timeout);
-            this.span.setTag("span.timeout", true);
-        }   
+        }
         let { statusCode } = this.response || { statusCode: 500 };
         this.span.setTag(Tags.HTTP_STATUS_CODE, statusCode);
         this._endAt = process.hrtime();
@@ -184,14 +182,14 @@ class SuperAgentJaeger {
         this.body += data;
     }
 
-    onResponse(response) {     
-        this.response = response;        
+    onResponse(response) {
+        this.response = response;
         this.response.once('readable', this.readable.bind(this));
         this.response.on('data', this.data.bind(this));
         this.response.on('end', this.endTrace.bind(this));
     }
 
-    onRequest(request) {        
+    onRequest(request) {
         this.request = request;
         this.request.span = this.span;
         if (!_.isEmpty(this.request._data))
@@ -200,7 +198,7 @@ class SuperAgentJaeger {
             this.logEvent("request.formData", this.request._formData);
 
         _.each(this.queryParams, (queryValue, queryName) => {
-            if(queryName) this.span.setTag(`query.${queryName}`, queryValue);
+            if (queryName) this.span.setTag(`query.${queryName}`, queryValue);
         });
 
         this._startAt = process.hrtime()
