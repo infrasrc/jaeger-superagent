@@ -129,6 +129,7 @@ class SuperAgentJaeger {
 
     logError(errorObject) {
         Tracer.logError(this.span, errorObject);
+        errorObject.traced = true;
     }
 
     async endTrace(error) {
@@ -140,7 +141,7 @@ class SuperAgentJaeger {
         this._endAt = process.hrtime();
 
         if (error) {
-            this.logError(error)
+            this.logError(error);
         } else {
             this.logEvent('response.body', this.body);
         }
