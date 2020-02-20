@@ -127,9 +127,8 @@ class SuperAgentJaeger {
         this.span.log({ event, value });
     }
 
-    logError(errorObject, message, stack) {
-        this.span.setTag(Tags.ERROR, true);
-        this.span.log({ 'event': 'error', 'error.object': errorObject, 'message': message, 'stack': stack });
+    logError(errorObject) {
+        Tracer.logError(this.span, errorObject);
     }
 
     async endTrace(error) {
@@ -141,7 +140,7 @@ class SuperAgentJaeger {
         this._endAt = process.hrtime();
 
         if (error) {
-            this.logError(error, error.message, error.stack)
+            this.logError(error)
         } else {
             this.logEvent('response.body', this.body);
         }
