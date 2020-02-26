@@ -3,7 +3,6 @@ const { Tags, FORMAT_HTTP_HEADERS, globalTracer } = Tracer.opentracing;
 const tracer = globalTracer();
 const NS_PER_SEC = 1e9;
 const MS_PER_NS = 1e6;
-const TWO_HOURS_IN_MS = 2 * 60 * 60 * 1000;
 const request = require('superagent');
 const _ = require('lodash');
 const URL = require('url');
@@ -18,18 +17,31 @@ methods.forEach(method => {
         const parentSpan = _.find(args, (a) => 'Span' === _.get(a, 'constructor.name')) || null;
         args = _.pull(args, parentSpan);
         const request = ref[name](...args);
-        const superAgentTracer = new SuperAgentJaeger(request, parentSpan);
-        return request.use(superAgentTracer.startTrace.bind(superAgentTracer));
+        return request.use((agent) => {
+            agent.on('request', (request) => {
+                const superAgentTracer = new SuperAgentJaeger(request, parentSpan);
+                superAgentTracer.onRequest(request);
+            }).catch(error => {
+                const span = _.get(error, 'response.res.span', null);
+                if (span) {
+                    span.finish();
+                    Tracer.logError(span, error);
+                }
+            });
+        });
     };
 });
 
 class SuperAgentJaeger {
 
     constructor(request, parentSpan) {
+        this.url = request.url;
+        if (!this.url.startsWith("http")) this.url = `http://${this.url}`;
+        this.uri = URL.parse(this.url);
+        this.parentSpan = parentSpan;
         this.name = 'superagent.request';
-        this.span = tracer.startSpan(this.name, { childOf: parentSpan });
-        this.setTimeout();
         this.body = "";
+        this.queryParams = {};
         this._startAt = null;
         this._socketAssigned = null;
         this._dnsLookupAt = null;
@@ -39,15 +51,18 @@ class SuperAgentJaeger {
         this._endAt = null;
         this._query = request.query.bind(request);
         this.query = this.query.bind(this);
-        this.queryParams = {};
+        this.readable = this.readable.bind(this);
+        this.data = this.data.bind(this);
+        this.onRequest = this.onRequest.bind(this);
+        this.endTrace = this.endTrace.bind(this);
+        this.lookup = this.lookup.bind(this);
+        this.connect = this.connect.bind(this);
+        this.secureConnect = this.secureConnect.bind(this);
+        this.timeout = this.timeout.bind(this);
+        this.onSocket = this.onSocket.bind(this);
+        this.onResponse = this.onResponse.bind(this);
+        this.onError = this.onError.bind(this);
         request.query = this.query;
-    }
-
-    setTimeout() {
-        this.span.timeout = setTimeout(() => {
-            this.span.setTag("span.timeout", true);
-            this.endTrace();
-        }, TWO_HOURS_IN_MS);
     }
 
     query(param) {
@@ -105,24 +120,6 @@ class SuperAgentJaeger {
         }
     }
 
-    startTrace(agent) {
-        agent.span = this.span;
-        this.headers = {};
-        this.agent = agent;
-        this.url = agent.url;
-        if (!agent.url.startsWith("http")) this.url = `http://${agent.url}`;
-        this.uri = URL.parse(this.url);
-        this.span.setTag(Tags.HTTP_URL, this.uri.href);
-        this.span.setTag("http.protocol", this.uri.protocol.replace(':', ''));
-        this.span.setTag("http.hostname", this.uri.hostname);
-        this.span.setTag(Tags.HTTP_METHOD, agent.method);
-        this.span.setTag(Tags.SPAN_KIND, Tags.SPAN_KIND_RPC_CLIENT);
-        tracer.inject(this.span, FORMAT_HTTP_HEADERS, this.headers);
-        this.agent.set(this.headers);
-        this.agent.on('request', this.onRequest.bind(this));
-        this.agent.on('error', this.endTrace.bind(this));
-    }
-
     logEvent(event, value) {
         this.span.log({ event, value });
     }
@@ -132,29 +129,21 @@ class SuperAgentJaeger {
         errorObject.traced = true;
     }
 
-    async endTrace(error) {
-        if (this.span.timeout) {
-            clearTimeout(this.span.timeout);
-        }
+    async endTrace() {
         let { statusCode } = this.response || { statusCode: 500 };
         this.span.setTag(Tags.HTTP_STATUS_CODE, statusCode);
         this._endAt = process.hrtime();
-
-        if (error) {
-            this.logError(error);
-        } else {
-            this.logEvent('response.body', this.body);
-        }
+        this.logEvent('response.body', this.body);
         this.logEvent('eventTimes', this.eventTimes);
-        this.span.finish();
+        if (this.response.statusCode === 200) this.span.finish();
     }
 
     onSocket(socket) {
         this._socketAssigned = process.hrtime();
-        socket.on('lookup', this.lookup.bind(this));
-        socket.on('connect', this.connect.bind(this));
-        socket.on('secureConnect', this.secureConnect.bind(this));
-        socket.on('timeout', this.timeout.bind(this));
+        socket.on('lookup', this.lookup);
+        socket.on('connect', this.connect);
+        socket.on('secureConnect', this.secureConnect);
+        socket.on('timeout', this.timeout);
     };
 
     lookup() {
@@ -170,8 +159,8 @@ class SuperAgentJaeger {
     }
 
     timeout() {
-        const error = new Error(`ETIMEDOUT for req.url: ${this.agent.url}`);
-        this.endTrace({ status: 408, response: {}, message: error.message, stack: error.stack });
+        const error = new Error(`ETIMEDOUT for req.url: ${this.url}`);
+        this.onError({ status: 408, response: {}, message: error.message, stack: error.stack });
     }
 
     readable() {
@@ -182,28 +171,50 @@ class SuperAgentJaeger {
         this.body += data;
     }
 
+    onError(error) {
+        this.logError(error);
+        this.span.finish();
+    }
+
     onResponse(response) {
         this.response = response;
-        this.response.once('readable', this.readable.bind(this));
-        this.response.on('data', this.data.bind(this));
-        this.response.on('end', this.endTrace.bind(this));
+        response.span = this.span;
+        response.once('readable', this.readable);
+        response.on('data', this.data);
+        response.on('end', this.endTrace);
     }
 
     onRequest(request) {
-        this.request = request;
-        this.request.span = this.span;
-        if (!_.isEmpty(this.request._data))
-            this.logEvent("request.body", this.request._data);
-        if (!_.isEmpty(this.request._formData))
-            this.logEvent("request.formData", this.request._formData);
+        this.span = tracer.startSpan(this.name, { childOf: this.parentSpan });
+        const headers = {};
+        this.span.setTag(Tags.HTTP_URL, this.uri.href);
+        this.span.setTag("http.protocol", this.uri.protocol.replace(':', ''));
+        this.span.setTag("http.hostname", this.uri.hostname);
+        this.span.setTag(Tags.HTTP_METHOD, request.method);
+        this.span.setTag(Tags.SPAN_KIND, Tags.SPAN_KIND_RPC_CLIENT);
+        tracer.inject(this.span, FORMAT_HTTP_HEADERS, headers);
+
+        request.set("uber-trace-id", headers["uber-trace-id"]);
+
+        if (!_.isEmpty(request._data))
+            this.logEvent("request.body", request._data);
+
+        if (!_.isEmpty(request._formData))
+            this.logEvent("request.formData", request._formData);
+
+        _.each(request._header, (headerValue, headerName) => {
+            if (headerName) this.span.setTag(`header.${headerName}`, headerValue);
+        });
 
         _.each(this.queryParams, (queryValue, queryName) => {
             if (queryName) this.span.setTag(`query.${queryName}`, queryValue);
         });
 
-        this._startAt = process.hrtime()
-        this.request.req.on('socket', this.onSocket.bind(this));
-        this.request.req.on('response', this.onResponse.bind(this));
+        this._startAt = process.hrtime();
+
+        request.req.on('socket', this.onSocket);
+        request.req.on('response', this.onResponse);
+        request.req.on('error', this.onError);
 
     }
 }
