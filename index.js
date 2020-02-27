@@ -6,6 +6,7 @@ const MS_PER_NS = 1e6;
 const request = require('superagent');
 const _ = require('lodash');
 const URL = require('url');
+const util = require('util');
 const methods = require('methods');
 const ref = {};
 
@@ -21,17 +22,19 @@ methods.forEach(method => {
             agent.on('request', (request) => {
                 const superAgentTracer = new SuperAgentJaeger(request, parentSpan);
                 superAgentTracer.onRequest(request);
-            }).catch(error => {
-                const span = _.get(error, 'response.res.span', null);
-                if (span) {                  
-                    Tracer.logError(span, error);
-                    span.finish();
-                }
-            });
+            });           
         });
     };
 });
 
+class JaegerCustomHttpError extends Error {
+    constructor(message, response, status) {
+        super(message); 
+        this.message = message;
+        this.response = util.inspect(response, false);
+        this.status = status;
+    }
+}
 class SuperAgentJaeger {
 
     constructor(request, parentSpan) {
@@ -130,12 +133,15 @@ class SuperAgentJaeger {
     }
 
     async endTrace() {
-        let { statusCode } = this.response || { statusCode: 500 };
+
+        const statusCode = _.get(this.response, 'statusCode', 500);
+        const statusMessage = _.get(this.response, 'statusMessage', this.response.text);
         this.span.setTag(Tags.HTTP_STATUS_CODE, statusCode);
         this._endAt = process.hrtime();
         this.logEvent('response.body', this.body);
         this.logEvent('eventTimes', this.eventTimes);
         if (this.response.statusCode === 200) this.span.finish();
+        else this.onError(new JaegerCustomHttpError(statusMessage, this.response, statusCode));
     }
 
     onSocket(socket) {
@@ -178,6 +184,7 @@ class SuperAgentJaeger {
 
     onResponse(response) {
         this.response = response;
+
         response.span = this.span;
         response.once('readable', this.readable);
         response.on('data', this.data);
