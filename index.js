@@ -23,9 +23,9 @@ methods.forEach(method => {
                 superAgentTracer.onRequest(request);
             }).catch(error => {
                 const span = _.get(error, 'response.res.span', null);
-                if (span) {
-                    span.finish();
+                if (span) {                  
                     Tracer.logError(span, error);
+                    span.finish();
                 }
             });
         });
