@@ -193,6 +193,7 @@ class SuperAgentJaeger {
 
     onRequest(request) {
         this.span = tracer.startSpan(this.name, { childOf: this.parentSpan });
+        request.span = this.span;
         const headers = {};
         this.span.setTag(Tags.HTTP_URL, this.uri.href);
         this.span.setTag("http.protocol", this.uri.protocol.replace(':', ''));
